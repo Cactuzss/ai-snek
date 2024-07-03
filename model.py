@@ -7,6 +7,8 @@ action_size = 4
 gamma = 0.9
 lr  = 0.0001
 
+path = 'model.pth'
+
 class Model(nn.Module):
     def __init__(self):
         super(Model, self).__init__()

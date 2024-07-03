@@ -1,15 +1,17 @@
 import pygame
-from random import randint
-
 import torch
-from model import model, train_step
 import math
+from sys import argv
+
+from random import randint
+from model import model, train_step, path
 
 WIDTH = 800
 HEIGHT = 800
-FPS = 30
+FPS = 60
 
 DEBUG  =  True
+SHOULD_LEARN =  False
 
 BACKGROUND_COLOR = (64, 128, 64)
 FOREGROUND_COLOR = (0, 192, 0)
@@ -217,9 +219,31 @@ def main():
     
     clock = pygame.time.Clock()
     
+    SHOULD_LEARN = False
+    BASE_SPEED = 0
+    
+    print(argv)
+    for i in range(0, len(argv)):
+        match argv[i]:
+            case "--train":
+                SHOULD_LEARN = True
+                print("training flag")
+            case "--speed":
+                try:
+                    BASE_SPEED = int(argv[i + 1])
+                    print(f"speed flag. speed = {BASE_SPEED}")
+                except IndexError:
+                    print("Did not recognize the speed")
+        
+    
     field =  Field()
     counter = 0
-    speed = 0
+    speed = BASE_SPEED
+    
+    try:
+        model.load_state_dict(torch.load(path))
+    except FileNotFoundError:
+        pass
     
     rays = field.snake.cast_rays()
     data = [Field.apple[0], Field.apple[1], field.snake.body[0].x, field.snake.body[0].y, rays[0], rays[1], rays[2], rays[3], Field.cell_count, Field.cell_count, len(field.snake.body), field.snake.direction, distance_head_apple(field)]
@@ -235,11 +259,10 @@ def main():
     
     running = True
     while running:
-        
         if speed == 1000000:
             field = None
             field = Field()
-            speed = 0
+            speed = BASE_SPEED
             counter = 0
             continue
             
@@ -282,31 +305,32 @@ def main():
                         print(field.snake.cast_rays())
     
         
-        distance_before_move = distance_head_apple(field)
-        rays = field.snake.cast_rays()
-        data = [Field.apple[0], Field.apple[1], field.snake.body[0].x, field.snake.body[0].y, rays[0], rays[1], rays[2], rays[3], Field.cell_count, Field.cell_count, len(field.snake.body), field.snake.direction, distance_before_move]
-        state = data
-        state = torch.tensor(state, dtype=torch.float32)
-        
-        result = model(state)
-        #print(result)
-        move = torch.argmax(result)
-        
-        match move:
-            case Direction.LEFT:
-                if field.snake.get_direction() != Direction.reverse(Direction.LEFT):
-                    field.snake.change_direction(Direction.LEFT)
-            case Direction.RIGHT:
-                if field.snake.get_direction() != Direction.reverse(Direction.RIGHT):
-                    field.snake.change_direction(Direction.RIGHT)
-            case Direction.UP:
-                if field.snake.get_direction() != Direction.reverse(Direction.UP):
-                    field.snake.change_direction(Direction.UP)
-            case Direction.DOWN:
-                if field.snake.get_direction() != Direction.reverse(Direction.DOWN):
-                    field.snake.change_direction(Direction.DOWN)
-        
         if counter == speed:
+            distance_before_move = distance_head_apple(field)
+            rays = field.snake.cast_rays()
+            data = [Field.apple[0], Field.apple[1], field.snake.body[0].x, field.snake.body[0].y, rays[0], rays[1], rays[2], rays[3], Field.cell_count, Field.cell_count, len(field.snake.body), field.snake.direction, distance_before_move]
+            state = data
+            state = torch.tensor(state, dtype=torch.float32)
+            
+            result = model(state)
+            #print(result)
+            move = torch.argmax(result)
+            
+            match move:
+                case Direction.LEFT:
+                    if field.snake.get_direction() != Direction.reverse(Direction.LEFT):
+                        field.snake.change_direction(Direction.LEFT)
+                case Direction.RIGHT:
+                    if field.snake.get_direction() != Direction.reverse(Direction.RIGHT):
+                        field.snake.change_direction(Direction.RIGHT)
+                case Direction.UP:
+                    if field.snake.get_direction() != Direction.reverse(Direction.UP):
+                        field.snake.change_direction(Direction.UP)
+                case Direction.DOWN:
+                    if field.snake.get_direction() != Direction.reverse(Direction.DOWN):
+                        field.snake.change_direction(Direction.DOWN)
+            
+            print(f"Record: {record}\t Deaths: {death_counter}\t Current: {collected} \t argmax = {torch.argmax(result)} \t maxval = {torch.max(result)}")
             res = field.move()
             counter = 0
             if res == -1:
@@ -318,37 +342,38 @@ def main():
             elif res ==  1:
                 got_apple =  1
                 collected += 1
+                
+            
+            if SHOULD_LEARN:
+                distance_after_move = distance_head_apple(field)
+                rays = field.snake.cast_rays()
+                next_data = [Field.apple[0], Field.apple[1], field.snake.body[0].x, field.snake.body[0].y, rays[0], rays[1], rays[2], rays[3], Field.cell_count, Field.cell_count, len(field.snake.body), field.snake.direction, distance_after_move]
+                next_state = torch.tensor(next_data, dtype=torch.float32)
+                    
+            #print(f'Before = {distance_before_move} ; After = {distance_after_move}')
+                    
+                if got_apple ==  1:
+                    train_step(state, move, 1, next_state, True)
+                    got_apple  =  0
+                    
+                elif died  != 0:
+                    train_step(state, move, -1, next_state, False)
+                    
+                elif math.fabs(distance_before_move) <  math.fabs(distance_after_move):
+                    train_step(state, move, -0.1, next_state, False)
+                    
+                elif math.fabs(distance_before_move) >  math.fabs(distance_after_move):
+                    train_step(state, move, 0.1, next_state, False)
+                    
+                else:
+                    train_step(state, move, 0.00001, next_state, False)
         else:
             counter += 1
             
-        distance_after_move = distance_head_apple(field)
+        # 
             
         if collected >= record:
             record = collected
-            
-        print(f"Record: {record}\t Deaths: {death_counter}\t Current: {collected} \t argmax = {torch.argmax(result)} \t maxval = {torch.max(result)}")
-            
-        rays = field.snake.cast_rays()
-        next_data = [Field.apple[0], Field.apple[1], field.snake.body[0].x, field.snake.body[0].y, rays[0], rays[1], rays[2], rays[3], Field.cell_count, Field.cell_count, len(field.snake.body), field.snake.direction, distance_after_move]
-        next_state = torch.tensor(next_data, dtype=torch.float32)
-                
-        #print(f'Before = {distance_before_move} ; After = {distance_after_move}')
-                
-        if got_apple ==  1:
-            train_step(state, move, 1, next_state, True)
-            got_apple  =  0
-            
-        elif died  != 0:
-            train_step(state, move, -1, next_state, False)
-            
-        elif math.fabs(distance_before_move) <  math.fabs(distance_after_move):
-            train_step(state, move, -0.1, next_state, False)
-            
-        elif math.fabs(distance_before_move) >  math.fabs(distance_after_move):
-            train_step(state, move, 0.1, next_state, False)
-            
-        else:
-            train_step(state, move, 0.00001, next_state, False)
             
             
         screen.fill(BACKGROUND_COLOR)
@@ -357,6 +382,7 @@ def main():
         pygame.display.flip()
                 
     pygame.quit()
+    torch.save(model.state_dict(), path)
 
 if __name__ == "__main__":
     main()
